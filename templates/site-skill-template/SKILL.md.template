@@ -1,0 +1,56 @@
+---
+name: SITE_NAME
+description: "Retrieve data from SITE_DISPLAY_NAME using its internal API. Use when asked to list, fetch, or download content from SITE_DISPLAY_NAME."
+---
+
+# SITE_DISPLAY_NAME
+
+Retrieve content from SITE_DISPLAY_NAME via its internal API.
+
+## If This Breaks
+
+This skill uses SITE_DISPLAY_NAME's internal, undocumented API. If commands fail:
+
+1. **Read the error** — 401/403 likely means expired cookie or renamed cookie.
+2. **Re-discover** using the `website-to-api` meta-skill.
+3. **Update this skill** — fix the script and SKILL.md with the new API shape.
+
+## Prerequisites
+
+- `SITE_UPPER_AUTH_COOKIE` environment variable set to your session cookie value
+- Python 3.9+, runs via `uv run`
+
+## Getting the Cookie
+
+1. Open Chrome DevTools (Cmd+Option+I) on SITE_URL
+2. Go to Application > Cookies > COOKIE_DOMAIN
+3. Find `COOKIE_NAME` (httpOnly) and copy its value
+4. `export SITE_UPPER_AUTH_COOKIE="<value>"`
+
+## Commands
+
+### list-items
+
+```bash
+uv run skills/SITE_NAME/scripts/client.py list-items SITE_URL
+```
+
+### get-item
+
+```bash
+uv run skills/SITE_NAME/scripts/client.py get-item SITE_URL ITEM_SLUG
+```
+
+### get-text
+
+```bash
+uv run skills/SITE_NAME/scripts/client.py get-text SITE_URL ITEM_SLUG
+```
+
+## API Reference
+
+Document discovered endpoints here:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/...` | GET | ... |

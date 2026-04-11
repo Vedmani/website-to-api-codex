@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["httpx", "typer", "rich", "markdownify"]
+# ///
+"""Retrieve content from SITE_DISPLAY_NAME via its internal API.
+
+Auth: uses the `COOKIE_NAME` httpOnly cookie.
+Set SITE_UPPER_AUTH_COOKIE env var or pass via --cookie.
+"""
+
+import json
+import os
+import re
+from pathlib import Path
+
+import httpx
+import typer
+from markdownify import markdownify as md
+from rich.console import Console
+from rich.table import Table
+
+app = typer.Typer(help="SITE_DISPLAY_NAME retrieval CLI")
+console = Console()
+
+# ── Auth ──────────────────────────────────────────────────────────────
+# If the site renames its session cookie, update this constant.
+COOKIE_NAME = "COOKIE_NAME_HERE"
+ENV_VAR = "SITE_UPPER_AUTH_COOKIE"
+
+
+def _get_cookie(override: str | None = None) -> str:
+    val = override or os.environ.get(ENV_VAR, "")
+    if not val:
+        console.print(
+            f"[red]Error: No session cookie.[/red]\n"
+            f"Set {ENV_VAR} env var or pass --cookie.\n"
+            f"To get it: Chrome DevTools > Application > Cookies > {COOKIE_NAME}"
+        )
+        raise typer.Exit(1)
+    return val
+
+
+def _client(cookie: str) -> httpx.Client:
+    return httpx.Client(
+        cookies={COOKIE_NAME: cookie},
+        headers={"User-Agent": "WebsiteToAPI/1.0"},
+        follow_redirects=True,
+        timeout=30.0,
+    )
+
+
+# ── Commands ──────────────────────────────────────────────────────────
+# Add your commands here: list-items, get-item, get-text, etc.
+# Follow the pattern in the substack skill for reference.
+
+
+@app.command()
+def list_items(
+    site: str = typer.Argument(help="Site base URL"),
+    limit: int = typer.Option(12, help="Number of items to return"),
+    cookie: str = typer.Option(None, help="Session cookie value"),
+):
+    """List items from the site."""
+    session = _get_cookie(cookie)
+    # TODO: implement endpoint call
+    console.print("[yellow]Not yet implemented — customize for your site[/yellow]")
+
+
+@app.command()
+def get_text(
+    site: str = typer.Argument(help="Site base URL"),
+    slug: str = typer.Argument(help="Item slug or ID"),
+    outfile: str = typer.Option(None, "--out", "-o", help="Output file path"),
+    cookie: str = typer.Option(None, help="Session cookie value"),
+):
+    """Fetch an item and save as Markdown."""
+    session = _get_cookie(cookie)
+    # TODO: implement endpoint call, HTML→Markdown conversion
+    console.print("[yellow]Not yet implemented — customize for your site[/yellow]")
+
+
+if __name__ == "__main__":
+    app()
