@@ -1,151 +1,132 @@
 ---
 name: website-to-api
-description: "Reverse-engineer a website's internal API using Chrome browser automation. Use when asked to discover, wrap, or build a programmatic interface for a website that doesn't have a public API. Guides the process of finding endpoints, extracting auth, and building scripts."
+description: "Discover and wrap a website's internal API using browser network inspection, sanitized HAR analysis, and browserless replay. Use when asked to reverse-engineer an undocumented web API, turn a browser workflow into a CLI, compare authenticated and unauthenticated behavior, or generate a reusable site-specific Codex skill."
 ---
 
 # Website to API
 
-A systematic approach to discovering and wrapping any website's internal API using Chrome browser automation (Claude in Chrome extension).
+Turn an authorized browser workflow into a tested HTTP client and an optional site-specific Codex skill.
 
-## When to Use This Skill
+## Operating Loop
 
-- The user wants to programmatically access data from a website that has no public API
-- You need to figure out how a website fetches its data internally
-- You need to extract authentication cookies to use in scripts
-- A site-specific skill (e.g. `substack`) has broken and needs re-discovery
+1. Observe the smallest user-visible workflow that produces the desired data.
+2. Prefer a user-supplied HAR, then distill candidate requests from it or live network traffic.
+3. Reproduce the request browserlessly with the fewest necessary headers and no auth.
+4. Compare browser, unauthenticated, and explicitly authenticated behavior.
+5. Build and test a site-specific `uv run` client.
+6. Generate a reviewable skill under `outputs/<site-name>-skill/`.
+7. Ask before installing the generated skill.
 
-## The Pattern
+Stop when the client works. Do not exhaustively map an API unless the user asks.
 
-Every modern web application fetches data from internal API endpoints. This skill teaches a repeatable 4-step process to discover and wrap those endpoints.
+## Safety Boundary
 
-### Step 1: Discover Endpoints
+- Work only with sites, accounts, and data the user is authorized to access.
+- Do not bypass authentication, paywalls, CAPTCHAs, bot controls, or authorization checks.
+- Default to read-only endpoints. Obtain explicit approval before replaying writes, purchases, messages, uploads, deletes, or other consequential actions.
+- Treat HARs, browser profiles, cookies, storage state, request bodies, and response bodies as sensitive.
+- Never print or store credential values in reports, generated skills, source control, or shell history.
 
-Navigate to the target website using the Chrome extension and observe what API calls the page makes.
+## Choose the Discovery Path
 
-**Tools needed:**
-```
-ToolSearch("select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrome__navigate,mcp__claude-in-chrome__javascript_tool,mcp__claude-in-chrome__read_network_requests,mcp__claude-in-chrome__get_page_text,mcp__claude-in-chrome__read_page")
-```
+Use the first suitable path; keep the others available:
 
-**Procedure:**
+1. **Supplied or manually exported HAR (preferred):** analyze it directly. A user-controlled export from a fresh isolated browser session is the safest default because it avoids attaching automation to an existing browser. Do not modify or delete a user-supplied HAR.
+2. **Live browser inspection:** use when no HAR exists and manual export is impractical, or when the user asks Codex to perform discovery. Load and follow the relevant browser skill, use an isolated profile, and inspect fetch/XHR traffic while performing the workflow.
+3. **Sanitized HAR capture (optional):** use when the user wants automated capture, live logs are truncated or noisy, repeated comparison matters, or a durable discovery artifact is useful.
+4. **HTML/bundle inspection:** use when browser capture stalls or the data is server-rendered. Fetch HTML and JavaScript bundles, search them with `rg`, and verify candidate endpoints directly.
 
-1. **Get tab context and navigate:**
-   ```
-   mcp__claude-in-chrome__tabs_context_mcp(createIfEmpty=true)
-   mcp__claude-in-chrome__navigate(url="https://target-site.com", tabId=TAB_ID)
-   ```
+Do not make a HAR a hard prerequisite. If importing one is unavailable, continue with the least invasive suitable fallback instead of reducing the requested capability.
 
-2. **Enable network tracking, then trigger actions:**
-   ```
-   mcp__claude-in-chrome__read_network_requests(tabId=TAB_ID)  // starts tracking
-   ```
-   Navigate or interact with the page to trigger API calls, then read:
-   ```
-   mcp__claude-in-chrome__read_network_requests(tabId=TAB_ID, urlPattern="api")
-   ```
+Read [references/capture-and-har.md](references/capture-and-har.md) before capturing or importing a HAR. Read [references/api-patterns.md](references/api-patterns.md) for GraphQL, pagination, polling, SSE, WebSockets, uploads, and framework data.
 
-3. **Inspect page globals for config:**
-   ```javascript
-   // Run via javascript_tool — look for app config, API base URLs, user info
-   JSON.stringify(Object.keys(window).filter(k =>
-     k.includes('config') || k.includes('api') || k.includes('app') || k.startsWith('__')
-   ));
-   ```
+## Distill a HAR
 
-4. **Check for framework data (Next.js, etc.):**
-   ```javascript
-   // Next.js apps embed data in __NEXT_DATA__
-   const nd = document.getElementById('__NEXT_DATA__');
-   nd ? JSON.stringify(Object.keys(JSON.parse(nd.textContent))) : 'not Next.js';
-   ```
+Generate a redacted JSON report:
 
-5. **Try common API patterns:**
-   ```javascript
-   // Most sites use /api/v1/ or similar
-   fetch('/api/v1/...', { credentials: 'include' })
-     .then(r => r.json())
-     .then(data => { document.title = JSON.stringify(Object.keys(data)); });
-   ```
-
-6. **Document what you find** — endpoints, parameters, response shapes.
-
-### Step 2: Extract Authentication
-
-Most sites use httpOnly session cookies that JavaScript cannot read. The browser sends them automatically with `fetch()` using `credentials: 'include'`.
-
-**Verify auth works:**
-```javascript
-// Run via javascript_tool on the target site
-fetch('/api/v1/some-endpoint', { credentials: 'include' })
-  .then(r => r.json())
-  .then(data => { document.title = JSON.stringify({ authenticated: true }); })
-  .catch(e => { document.title = 'ERROR: ' + e.message; });
-```
-
-**Compare auth vs no-auth:**
 ```bash
-# Unauthenticated (from terminal)
-curl -s 'https://target-site.com/api/v1/endpoint' | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(str(d)))"
-```
-Compare the response size/content with the browser-based fetch to identify what auth adds.
-
-**Find the cookie name:**
-- Check `window._analyticsConfig` or similar globals for site metadata
-- Search the web for "{site} API authentication cookie name"
-- Common patterns: `connect.sid`, `{site}.sid`, `session`, `_session_id`
-- The cookie is typically httpOnly on the site's domain or a parent domain
-
-**For script usage, the user must extract the cookie value once:**
-1. Open Chrome DevTools (Cmd+Option+I) on the target site
-2. Go to Application > Cookies > find the auth cookie
-3. Export as an environment variable: `export SITE_AUTH_COOKIE="<value>"`
-
-### Step 3: Build the Script
-
-Create a Python CLI script using PEP 723 inline metadata (runs via `uv run`, no install needed).
-
-**Script template:** See `templates/site-skill-template/scripts/client.py.template`
-
-**Key principles:**
-- Use `httpx` for HTTP, `typer` for CLI, `rich` for display, `markdownify` for HTML→MD
-- Accept auth via env var or `--sid`/`--cookie` flag
-- Auto-paginate when the API has offset/limit
-- Include a `get-text` command that fetches content and saves as Markdown
-- Print the output file path to stdout for piping
-
-### Step 4: Write the Skill
-
-Create a SKILL.md that documents:
-- The specific endpoints discovered
-- The auth cookie name and how to extract it
-- CLI commands with examples
-- A **recovery section** for when the API changes
-
-**Every site-specific skill MUST include this section:**
-
-```markdown
-## If This Breaks
-
-This skill uses an internal, undocumented API. If commands fail:
-
-1. Read the error — 401/403 likely means expired cookie or renamed cookie
-2. Re-discover using the `website-to-api` meta-skill
-3. Update this skill's SKILL.md and scripts with the new API shape
+python3 scripts/analyze_har.py work/site.har \
+  --host target-site.example \
+  --output work/discovery.json
 ```
 
-## Critical Rules
+The analyzer reports endpoint groups, query/header names, request and response shapes, pagination hints, status codes, and auth-material presence. It omits credential values and non-secret examples by default.
 
-### Do
-- Use the browser as the authenticated client — it handles cookies automatically
-- Write results to files, not `document.title` (which truncates and corrupts data)
-- Use `get_page_text` for extracting rendered page content — it's simpler than transferring HTML through JavaScript
-- Store cookie values in env vars, never in skill files or scripts
-- Compare authenticated vs unauthenticated responses to understand what auth provides
-- Document the auth cookie name so it can be updated if the site renames it
+Capture a sanitized HAR only when useful:
 
-### Don't
-- Don't ask the human for help with things the Chrome extension can verify (auth status, endpoint discovery, response inspection)
-- Don't rely on `document.title` for data larger than ~500 chars — it truncates silently and causes data corruption
-- Don't reconstruct or summarize API data from truncated strings — show exact API responses
-- Don't store any auth tokens, cookie values, or credentials in skill files
-- Don't assume API shapes are permanent — always include recovery instructions
+```bash
+uv run scripts/capture_har.py local 'https://target-site.example' work/site.har --headed
+uv run scripts/capture_har.py cdp "$WEBSITE_TO_API_CDP_URL" work/site.har --goto 'https://target-site.example'
+```
+
+Use CDP only when the user explicitly authorizes attachment to that browser. The capture script never intentionally retains credential values, but a HAR can still contain personal response data; keep it private and remove task-created artifacts when no longer needed.
+
+## Verify and Minimize the Request
+
+Recreate the method, URL, query, and body without credentials. Add non-secret headers only when testing shows they are required. Do not assume an exact captured User-Agent, every browser header, or every cookie must be replayed.
+
+Classify the result:
+
+- A terminal request succeeds: document the endpoint as unauthenticated.
+- A browser-created resource returns 404: create a fresh resource browserlessly before concluding auth is required.
+- The terminal returns 401/403 or redacted data: verify browser-context behavior, then identify the minimum auth mechanism.
+- A request succeeds only with state-changing setup: document that lifecycle and make client behavior explicit.
+
+Read [references/auth-and-replay.md](references/auth-and-replay.md) before transferring auth or probing any endpoint that might mutate state.
+
+## Build the Client
+
+Use `assets/site-skill-template/scripts/client.py.template` as a starting point when it fits.
+
+- Use `httpx`, `typer`, `rich`, and PEP 723 metadata.
+- Pass auth through site-specific environment variables, not CLI flags or files.
+- Do not send a browser User-Agent unless replay testing proves it necessary; make it configurable through an environment variable.
+- Auto-paginate only after confirming limits and cursors.
+- Bound error output and redact secret-like fields.
+- Implement polling before optional streaming when an async workflow supports both.
+- Test one successful request and one expected failure.
+
+## Generate the Site Skill
+
+After the client works, use `$skill-creator` to create or update the site-specific skill under:
+
+```text
+outputs/<site-name>-skill/
+```
+
+Adapt `assets/site-skill-template/`; do not leave placeholders. Include only required skill resources. The generated skill must contain:
+
+- A trigger-rich `SKILL.md`
+- Endpoint and request/response documentation
+- Auth behavior, credential names, and env vars—or an explicit no-auth statement
+- A tested client under `scripts/`
+- Recovery guidance for undocumented API changes
+- `agents/openai.yaml` with `policy.allow_implicit_invocation: false`
+
+Validate the skill, run its client with `--help`, execute a real request, and verify no secrets or HARs are present.
+
+## Install Only After Approval
+
+Ask the user before installation. After approval, run:
+
+```bash
+uv run scripts/install_site_skill.py outputs/<site-name>-skill --approved-by-user
+```
+
+The installer validates before replacing anything and rejects secret-like artifacts. Do not use `--force` unless the user also approved replacing an existing installed skill.
+
+## Completion Checklist
+
+- The client succeeds browserlessly and handles one negative case.
+- Auth versus no-auth behavior is documented from evidence.
+- Credential values are absent from logs, reports, scripts, and skills.
+- Consequential endpoints were not replayed without approval.
+- Generated skill validation passes and `allow_implicit_invocation` is false.
+- Task-created browser sessions are closed.
+- The final response reports generated paths, validation commands, and install status.
+
+## If Discovery Breaks
+
+1. Re-run the smallest workflow and compare a fresh redacted report.
+2. Check for endpoint, schema, auth-name, pagination, or async-lifecycle changes.
+3. Update the generated client and skill from observed evidence rather than guessing.

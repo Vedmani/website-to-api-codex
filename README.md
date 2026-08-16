@@ -1,81 +1,180 @@
 # website-to-api
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugin for reverse-engineering website internal APIs using Chrome browser automation.
+A local Codex plugin for reverse-engineering website internal APIs and generating reviewable site-specific Codex skills.
+
+This project began as a fork of [hamelsmu/website-to-api](https://github.com/hamelsmu/website-to-api) and retains that work's Git history. It has since been substantially redesigned as a standalone Codex plugin.
 
 ## What This Does
 
-Most websites don't have public APIs, but they all have internal ones. This plugin provides:
+Most websites do not expose public APIs, but modern web apps usually fetch data from internal endpoints. This plugin provides:
 
-1. **A meta-skill** (`website-to-api`) that teaches Claude how to discover and wrap any website's internal API
-2. **Site-specific skills** (like `substack`) that implement the pattern for known sites
-3. **Templates** for quickly adding new sites
+1. A meta-skill, `website-to-api`, for discovering and wrapping those internal APIs
+2. A deterministic HAR analyzer that emits redacted discovery JSON
+3. Optional sanitized HAR capture for isolated local or explicitly authorized CDP browsers
+4. Website-to-api-specific templates for generated site skills
+5. A Python client template that runs with `uv run` using PEP 723 inline metadata
+6. A validate-first, approval-gated installer for generated site skills
 
 ## How It Works
 
 The pattern is:
 
-1. **Discover** — Navigate to a website using the [Claude in Chrome](https://chromewebstore.google.com/detail/claude-in-chrome/) extension, inspect network requests, and find internal API endpoints
-2. **Authenticate** — Extract httpOnly session cookies from the browser to use in scripts
-3. **Script** — Build a CLI that calls the discovered endpoints with the extracted cookies
-4. **Adapt** — When APIs change (they're internal and undocumented), re-discover and update
-
-## Installation
-
-Add this plugin to your Claude Code project:
-
-```bash
-git submodule add https://github.com/hamelsmu/website-to-api.git
-```
+1. **Discover** - Navigate to a website with Codex browser automation, inspect requests, and identify internal endpoints
+2. **Distill** - Group candidate endpoints from live traffic or a supplied/sanitized HAR
+3. **Authenticate** - Verify which requests work with the browser session and what, if any, cookie or header is needed by scripts
+4. **Script** - Build a CLI that calls the discovered endpoints using auth supplied through environment variables
+5. **Generate** - Create a reviewable site-specific skill under `outputs/<site-name>-skill/`
+6. **Approve and install** - Validate first, then ask before copying the generated skill into `${CODEX_HOME:-$HOME/.codex}/skills/<site-name>`
 
 ## Available Skills
 
 | Skill | Description |
 |-------|-------------|
-| `website-to-api:website-to-api` | Meta-skill: how to discover and wrap any website's internal API |
-| `website-to-api:substack` | Retrieve posts from any Substack newsletter (list, search, full text) |
+| `website-to-api:website-to-api` | Meta-skill for discovering and wrapping a website's internal API |
 
 ## Usage
 
-### Discovering a new site's API
+Ask Codex:
 
-Ask Claude:
-> "Can you figure out the API for [website]? I want to be able to list and download content from it."
+> Use `website-to-api` to figure out the API for this site. I want to list and download content from it.
 
-Claude will use the `website-to-api` meta-skill to:
-- Navigate to the site via Chrome
-- Inspect network requests to find API endpoints
-- Test authentication
-- Build a script to call those endpoints
+Codex will use the skill to:
 
-### Using the Substack skill
+- Prefer `agent-browser` with a dedicated local automation profile when CDP/network/cookie capabilities help
+- Prefer an existing or manually exported HAR from a fresh isolated browser session as the safest discovery intake
+- Keep live browser inspection available when manual export is impractical or Codex is asked to perform discovery
+- Keep sanitized local/CDP capture optional, using it only when requested or when logs are noisy/truncated or repeatable comparison is useful
+- Fall back to terminal bundle/API verification when browser automation gets sticky or overlong
+- Identify endpoint URLs, methods, parameters, request bodies, and response shapes
+- Test authenticated browser requests against unauthenticated terminal requests
+- Generate a reviewable site-specific client and skill
+- Ask before installing the generated skill into Codex's personal skills directory
+
+## Browser Profile
+
+For `agent-browser` workflows, use a dedicated profile instead of a personal daily browser profile:
 
 ```bash
-# Set your auth cookie (extract from Chrome DevTools > Application > Cookies > substack.com)
-export SUBSTACK_SID="your-cookie-value"
-
-# List recent posts
-uv run skills/substack/scripts/substack.py list-posts https://www.lennysnewsletter.com --limit 20
-
-# Download a post as Markdown
-uv run skills/substack/scripts/substack.py get-text https://www.lennysnewsletter.com some-post-slug
+export WEBSITE_TO_API_BROWSER_PROFILE="$HOME/.agent-browser/profiles/website-to-api"
+agent-browser --profile "$WEBSITE_TO_API_BROWSER_PROFILE" --headed open "https://example.com"
 ```
 
-## Adding a New Site
+Use headed mode for first-time login, 2FA, consent screens, or debugging. Use headless mode only after the profile is authenticated and the workflow is repeatable. Close the active session before switching between headed and headless runs.
 
-1. Copy the template: `cp -r templates/site-skill-template skills/your-site`
-2. Use the `website-to-api` meta-skill to discover the site's API
-3. Fill in the SKILL.md and script with the discovered endpoints
-4. Submit a PR
+When the browser task is complete, close the automation session and verify cleanup:
 
-## Prerequisites
+```bash
+agent-browser close
+agent-browser session list
+```
 
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI
-- [Claude in Chrome](https://chromewebstore.google.com/detail/claude-in-chrome/) extension (for API discovery and auth verification)
-- Python 3.9+ and [uv](https://docs.astral.sh/uv/) (scripts use PEP 723 inline metadata)
+The profile directory and any saved state files contain auth material and should be treated as secrets.
+
+## HAR Analysis and Optional Capture
+
+Analyze a HAR without printing credential values or response samples:
+
+```bash
+python3 skills/website-to-api/scripts/analyze_har.py work/site.har \
+  --host example.com \
+  --output work/discovery.json
+```
+
+Capture is optional. Use it when a reproducible artifact is more useful than one-off live network inspection:
+
+```bash
+uv run skills/website-to-api/scripts/capture_har.py local \
+  'https://example.com' work/site.har --headed
+```
+
+The capture script redacts credential-like values and writes mode `0600`, but arbitrary response bodies can still contain personal information. Keep HARs private, never install them inside generated skills, and delete task-created captures when they are no longer needed.
+
+## Generated Site Skills
+
+Generated site skills are created first in a reviewable workspace path:
+
+```bash
+outputs/<site-name>-skill/
+```
+
+After the generated skill is validated, Codex should ask for user approval before installing it. With approval, install it into personal Codex skills:
+
+```bash
+uv run skills/website-to-api/scripts/install_site_skill.py \
+  outputs/<site-name>-skill \
+  --approved-by-user
+```
+
+The default installed location is:
+
+```bash
+${CODEX_HOME:-$HOME/.codex}/skills/<site-name>
+```
+
+Run a generated skill before installation:
+
+```bash
+uv run outputs/<site-name>-skill/scripts/client.py --help
+```
+
+Run an installed skill:
+
+```bash
+uv run "${CODEX_HOME:-$HOME/.codex}/skills/<site-name>/scripts/client.py" --help
+```
+
+Generated skills should contain only skill files and resources: `SKILL.md`, `agents/openai.yaml`, `scripts/`, `references/`, or `assets/` as needed. Do not add README files, AGENTS files, changelogs, installation guides, or other auxiliary docs inside generated skills.
+
+Generated website-to-api skills should set `policy.allow_implicit_invocation: false` in `agents/openai.yaml` so Codex uses them only when explicitly invoked by the user.
+
+## Development
+
+Templates for generated site skills live in two places:
+
+- `skills/website-to-api/assets/site-skill-template/` for the installed plugin skill
+- `templates/site-skill-template/` as repo-development convenience
+
+Keep the two template trees byte-for-byte identical. The installed skill's asset copy is canonical.
+
+## Testing
+
+Validate the meta-skill:
+
+```bash
+uv run --with pyyaml python \
+  "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py" \
+  skills/website-to-api
+```
+
+Validate the plugin manifest:
+
+```bash
+uv run --with pyyaml python \
+  "${CODEX_HOME:-$HOME/.codex}/skills/.system/plugin-creator/scripts/validate_plugin.py" \
+  .
+```
+
+Run behavioral tests:
+
+```bash
+uv run --with pytest --with pyyaml pytest -q
+```
+
+For regression testing, start a clean projectless Codex thread and ask it to use `website-to-api` on a real site. The test should verify that the downstream thread:
+
+- Uses the installed plugin
+- Generates a working client and skill under `outputs/`
+- Validates the generated skill
+- Asks before installing it
+- Closes any `agent-browser` sessions
 
 ## Design Principles
 
-- **Browser-first auth**: Use the Chrome extension to handle authentication. The browser already has the user's session — don't ask humans for what the browser can provide.
-- **Resilient to change**: Internal APIs break. Every site skill includes recovery instructions and references the meta-skill for re-discovery.
-- **No secrets in code**: Auth cookies are always passed via environment variables, never stored in skill files or scripts.
-- **Self-contained scripts**: Each script uses PEP 723 inline metadata so it runs with just `uv run` — no install step.
+- **Browser-first auth**: Use the browser session to verify authenticated behavior before asking for manual cookie extraction.
+- **HAR-first without capability loss**: Prefer a supplied or manually exported HAR, while retaining live inspection, isolated local capture, authorized CDP, and HTML/bundle fallbacks.
+- **Redacted artifacts**: Discovery reports expose names and schemas by default, not credential or personal values.
+- **Discovery budget**: Stop tracing once enough endpoint, auth, and response-shape information exists to build a wrapper.
+- **Approval-gated install**: Generated site skills are not installed until the user approves.
+- **No secrets in code or shell history**: Auth cookies, tokens, and credentials must be passed through environment variables and never committed.
+- **Resilient to change**: Internal APIs are undocumented and can break; every site-specific skill should include recovery instructions.
+- **Self-contained scripts**: Generated clients should use PEP 723 inline metadata so they run with `uv run` without a package install step.

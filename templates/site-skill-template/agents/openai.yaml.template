@@ -1,0 +1,7 @@
+interface:
+  display_name: "SITE_DISPLAY_NAME"
+  short_description: "Use SITE_DISPLAY_NAME's verified internal API"
+  default_prompt: "Use $SITE_NAME to SITE_DEFAULT_PROMPT_ACTION."
+
+policy:
+  allow_implicit_invocation: false

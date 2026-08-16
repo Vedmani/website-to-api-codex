@@ -1,0 +1,14 @@
+# Browser/auth artifacts generated while discovering internal APIs.
+*.auth-state.json
+*auth-state*.json
+*.cookies
+*.cookies.txt
+*.har
+.env
+.env.*
+.website-to-api-work/
+.website-to-api-profile/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
