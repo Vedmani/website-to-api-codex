@@ -30,7 +30,9 @@ def test_core_skill_uses_progressive_disclosure():
 
 
 def test_client_template_avoids_secret_cli_flags_and_hardcoded_ua():
-    text = (CANONICAL_TEMPLATE / "scripts" / "client.py.template").read_text(encoding="utf-8")
+    text = (CANONICAL_TEMPLATE / "scripts" / "client.py.template").read_text(
+        encoding="utf-8"
+    )
     assert "website-to-api/1.0" not in text
     assert "cookie: Optional" not in text
     assert 'USER_AGENT_ENV = "SITE_UPPER_USER_AGENT"' in text
@@ -43,4 +45,11 @@ def test_manifest_matches_plugin_name_and_has_no_todos():
     manifest_path = ROOT / ".codex-plugin" / "plugin.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["name"] == SKILL.name
+    assert manifest["repository"] == "https://github.com/Vedmani/website-to-api-codex"
+    assert manifest["interface"]["developerName"] == "Vedmani"
     assert "[TODO:" not in manifest_path.read_text(encoding="utf-8")
+
+
+def test_public_docs_do_not_contain_machine_specific_paths():
+    for name in ("README.md", "AGENTS.md"):
+        assert "/Users/" not in (ROOT / name).read_text(encoding="utf-8")

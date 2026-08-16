@@ -41,8 +41,10 @@ SENSITIVE_COMPACT_FRAGMENTS = {
     "password",
     "passwd",
     "privatekey",
+    "samlresponse",
     "secret",
     "session",
+    "signature",
     "token",
     "xsrf",
 }
@@ -86,9 +88,13 @@ def is_sensitive_name(name: str) -> bool:
         or any(fragment in compact for fragment in SENSITIVE_COMPACT_FRAGMENTS)
         or normalized
         in {
-        "authorization",
-        "proxy-authorization",
-        "set-cookie",
+            "authorization",
+            "code",
+            "key",
+            "proxy-authorization",
+            "set-cookie",
+            "sid",
+            "sig",
         }
     )
 
@@ -129,7 +135,9 @@ def json_shape(value: Any, depth: int = 0) -> Any:
         return shapes
     if isinstance(value, Mapping):
         return {
-            str(k): "<redacted>" if is_sensitive_name(str(k)) else json_shape(v, depth + 1)
+            str(k): "<redacted>"
+            if is_sensitive_name(str(k))
+            else json_shape(v, depth + 1)
             for k, v in list(value.items())[:100]
         }
     return type(value).__name__
@@ -200,8 +208,21 @@ def query_pairs(request: Mapping[str, Any], url: Any) -> List[Tuple[str, str]]:
             if isinstance(item, Mapping) and item.get("name") is not None:
                 pairs.append((str(item["name"]), str(item.get("value", ""))))
     if not pairs:
-        pairs = [(name, value) for name, value in parse_qsl(url.query, keep_blank_values=True)]
+        pairs = [
+            (name, value)
+            for name, value in parse_qsl(url.query, keep_blank_values=True)
+        ]
     return pairs
+
+
+def host_matches(hostname: Optional[str], filters: Sequence[str]) -> bool:
+    """Match a host exactly or as a subdomain, never as an arbitrary substring."""
+    candidate = (hostname or "").lower().rstrip(".")
+    for raw_filter in filters:
+        expected = raw_filter.lower().strip().rstrip(".")
+        if candidate == expected or candidate.endswith(f".{expected}"):
+            return True
+    return False
 
 
 def is_api_entry(entry: Mapping[str, Any]) -> bool:
@@ -218,7 +239,11 @@ def is_api_entry(entry: Mapping[str, Any]) -> bool:
     path = urlsplit(str(request.get("url", ""))).path
     if STATIC_EXTENSIONS.search(path):
         return False
-    return resource_type in {"xhr", "fetch"} or "json" in mime_type or method not in {"GET", "HEAD"}
+    return (
+        resource_type in {"xhr", "fetch"}
+        or "json" in mime_type
+        or method not in {"GET", "HEAD"}
+    )
 
 
 def append_unique(target: List[Any], value: Any) -> None:
@@ -249,7 +274,7 @@ def analyze_har(
         url = urlsplit(str(request.get("url", "")))
         if url.scheme not in {"http", "https"} or not url.netloc:
             continue
-        if hosts and not any(host.lower() in url.netloc.lower() for host in hosts):
+        if hosts and not host_matches(url.hostname, hosts):
             continue
         if not include_static and not is_api_entry(entry):
             continue
@@ -349,7 +374,9 @@ def render_text(report: Mapping[str, Any]) -> str:
     auth = report.get("auth", {})
     if isinstance(auth, Mapping):
         if auth.get("header_names"):
-            lines.append("Auth-like headers present: " + ", ".join(auth["header_names"]))
+            lines.append(
+                "Auth-like headers present: " + ", ".join(auth["header_names"])
+            )
         if auth.get("cookie_names"):
             lines.append("Cookie names present: " + ", ".join(auth["cookie_names"]))
     for index, endpoint in enumerate(report.get("endpoints", []), start=1):
@@ -367,7 +394,9 @@ def render_text(report: Mapping[str, Any]) -> str:
         if statuses:
             lines.append("    statuses: " + ", ".join(str(item) for item in statuses))
         if endpoint.get("pagination_parameters"):
-            lines.append("    pagination: " + ", ".join(endpoint["pagination_parameters"]))
+            lines.append(
+                "    pagination: " + ", ".join(endpoint["pagination_parameters"])
+            )
         if endpoint.get("request_body"):
             lines.append("    request body schema captured")
         if endpoint.get("response_shape"):
@@ -384,15 +413,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--host",
         action="append",
         default=[],
-        help="Keep hosts containing this substring; repeat for multiple hosts",
+        help="Keep this host and its subdomains; repeat for multiple hosts",
     )
-    parser.add_argument("--include-static", action="store_true", help="Include non-API traffic")
+    parser.add_argument(
+        "--include-static", action="store_true", help="Include non-API traffic"
+    )
     parser.add_argument(
         "--include-examples",
         action="store_true",
         help="Include redacted non-secret query/header examples in the report",
     )
-    parser.add_argument("--output", "-o", help="Write output to this path instead of stdout")
+    parser.add_argument(
+        "--output", "-o", help="Write output to this path instead of stdout"
+    )
     parser.add_argument("--format", choices=("json", "text"), default="json")
     return parser
 

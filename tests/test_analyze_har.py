@@ -32,15 +32,23 @@ def sample_har():
                         "queryString": [],
                         "headers": [
                             {"name": "User-Agent", "value": "Mozilla/5.0 Example"},
-                            {"name": "Authorization", "value": "Bearer TOP_SECRET_AUTH"},
+                            {
+                                "name": "Authorization",
+                                "value": "Bearer TOP_SECRET_AUTH",
+                            },
                             {"name": "X-CSRF-Token", "value": "TOP_SECRET_CSRF"},
-                            {"name": "Cookie", "value": "sessionid=TOP_SECRET_COOKIE; theme=dark"},
+                            {
+                                "name": "Cookie",
+                                "value": "sessionid=TOP_SECRET_COOKIE; theme=dark",
+                            },
                             {"name": "Accept", "value": "application/json"},
                         ],
                     },
                     "response": {
                         "status": 200,
-                        "headers": [{"name": "Content-Type", "value": "application/json"}],
+                        "headers": [
+                            {"name": "Content-Type", "value": "application/json"}
+                        ],
                         "content": {
                             "mimeType": "application/json",
                             "text": json.dumps(
@@ -63,7 +71,10 @@ def sample_har():
                     },
                     "response": {
                         "status": 200,
-                        "content": {"mimeType": "application/javascript", "text": "alert(1)"},
+                        "content": {
+                            "mimeType": "application/javascript",
+                            "text": "alert(1)",
+                        },
                     },
                 },
             ]
@@ -99,6 +110,16 @@ def test_examples_are_opt_in_and_secrets_remain_redacted():
     assert "TOP_SECRET" not in json.dumps(report)
 
 
+def test_host_filter_matches_exact_hosts_and_subdomains_only():
+    har = sample_har()
+    evil_entry = json.loads(json.dumps(har["log"]["entries"][0]))
+    evil_entry["request"]["url"] = "https://notexample.com/v1/leak"
+    har["log"]["entries"].append(evil_entry)
+    report = analyzer.analyze_har(har, hosts=["example.com"])
+    assert report["endpoint_count"] == 1
+    assert report["endpoints"][0]["host"] == "api.example.com"
+
+
 def test_capture_sanitizer_preserves_names_not_values():
     sanitized = capture.sanitize_har(sample_har())
     serialized = json.dumps(sanitized)
@@ -110,6 +131,25 @@ def test_capture_sanitizer_preserves_names_not_values():
     assert "token=%3Credacted%3E" in request["url"]
     response = sanitized["log"]["entries"][0]["response"]
     assert json.loads(response["content"]["text"])["access_token"] == "<redacted>"
+
+
+def test_capture_sanitizer_removes_url_credentials_and_opaque_bodies():
+    har = sample_har()
+    entry = har["log"]["entries"][0]
+    entry["request"]["url"] = "https://alice:secret@example.com/v1/items"
+    entry["request"]["postData"] = {"mimeType": "text/plain", "text": "password=secret"}
+    entry["response"]["content"] = {"mimeType": "text/html", "text": "private response"}
+    sanitized = capture.sanitize_har(har)
+    sanitized_entry = sanitized["log"]["entries"][0]
+    assert sanitized_entry["request"]["url"] == "https://example.com/v1/items"
+    assert sanitized_entry["request"]["postData"]["text"] == "<opaque-redacted>"
+    assert sanitized_entry["response"]["content"]["text"] == "<opaque-redacted>"
+    assert "secret" not in json.dumps(sanitized_entry)
+
+
+def test_common_signed_url_and_oauth_names_are_sensitive():
+    for name in ("code", "key", "sid", "sig", "SAMLResponse", "X-Amz-Signature"):
+        assert analyzer.is_sensitive_name(name)
 
 
 def test_local_browser_launch_falls_back_to_system_chrome():
@@ -127,7 +167,10 @@ def test_local_browser_launch_falls_back_to_system_chrome():
         chromium = Chromium()
 
     playwright = Playwright()
-    assert capture.launch_local_browser(playwright, headed=False, channel=None) == "browser"
+    assert (
+        capture.launch_local_browser(playwright, headed=False, channel=None)
+        == "browser"
+    )
     assert playwright.chromium.calls == [
         {"headless": True},
         {"headless": True, "channel": "chrome"},

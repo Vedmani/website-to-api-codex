@@ -2,6 +2,8 @@
 
 A local Codex plugin for reverse-engineering website internal APIs and generating reviewable site-specific Codex skills.
 
+This project began as a fork of [hamelsmu/website-to-api](https://github.com/hamelsmu/website-to-api) and retains that work's Git history. It has since been substantially redesigned as a standalone Codex plugin.
+
 ## What This Does
 
 Most websites do not expose public APIs, but modern web apps usually fetch data from internal endpoints. This plugin provides:
@@ -134,19 +136,13 @@ Templates for generated site skills live in two places:
 
 Keep the two template trees byte-for-byte identical. The installed skill's asset copy is canonical.
 
-Use Codex's bundled Python for local validation/helper scripts when available:
-
-```bash
-/Users/vedmani/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3
-```
-
 ## Testing
 
 Validate the meta-skill:
 
 ```bash
 uv run --with pyyaml python \
-  /Users/vedmani/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
+  "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py" \
   skills/website-to-api
 ```
 
@@ -154,7 +150,7 @@ Validate the plugin manifest:
 
 ```bash
 uv run --with pyyaml python \
-  /Users/vedmani/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py \
+  "${CODEX_HOME:-$HOME/.codex}/skills/.system/plugin-creator/scripts/validate_plugin.py" \
   .
 ```
 

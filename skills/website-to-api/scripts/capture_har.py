@@ -23,7 +23,9 @@ from analyze_har import is_sensitive_name, redact_mapping
 def _redact_header_value(name: str, value: str) -> str:
     normalized = name.lower()
     if normalized == "cookie":
-        names = [part.split("=", 1)[0].strip() for part in value.split(";") if "=" in part]
+        names = [
+            part.split("=", 1)[0].strip() for part in value.split(";") if "=" in part
+        ]
         return "; ".join(f"{cookie_name}=<redacted>" for cookie_name in names)
     if normalized == "set-cookie":
         first = value.split(";", 1)[0]
@@ -57,7 +59,13 @@ def _redact_url(url: str) -> str:
         for name, value in parse_qsl(parsed.query, keep_blank_values=True)
     ]
     fragment = "<redacted>" if parsed.fragment else ""
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), fragment))
+    netloc = parsed.netloc
+    if parsed.username is not None or parsed.password is not None:
+        hostname = parsed.hostname or ""
+        if ":" in hostname and not hostname.startswith("["):
+            hostname = f"[{hostname}]"
+        netloc = f"{hostname}:{parsed.port}" if parsed.port is not None else hostname
+    return urlunsplit((parsed.scheme, netloc, parsed.path, urlencode(query), fragment))
 
 
 def _redact_body(text: Any, mime_type: str = "") -> Any:
@@ -67,7 +75,7 @@ def _redact_body(text: Any, mime_type: str = "") -> Any:
         try:
             return json.dumps(redact_mapping(json.loads(text)), separators=(",", ":"))
         except (TypeError, ValueError):
-            return text
+            return "<opaque-redacted>"
     if "x-www-form-urlencoded" in mime_type.lower():
         return urlencode(
             [
@@ -75,7 +83,7 @@ def _redact_body(text: Any, mime_type: str = "") -> Any:
                 for name, value in parse_qsl(text, keep_blank_values=True)
             ]
         )
-    return text
+    return "<opaque-redacted>"
 
 
 def sanitize_har(har: Mapping[str, Any]) -> Dict[str, Any]:
@@ -89,13 +97,19 @@ def sanitize_har(har: Mapping[str, Any]) -> Dict[str, Any]:
         if isinstance(request, dict):
             request["url"] = _redact_url(str(request.get("url", "")))
             request["headers"] = list(_header_items(request.get("headers", [])))
-            for cookie in request.get("cookies", []) if isinstance(request.get("cookies"), list) else []:
+            for cookie in (
+                request.get("cookies", [])
+                if isinstance(request.get("cookies"), list)
+                else []
+            ):
                 if isinstance(cookie, dict) and "value" in cookie:
                     cookie["value"] = "<redacted>"
             query = request.get("queryString")
             if isinstance(query, list):
                 for item in query:
-                    if isinstance(item, dict) and is_sensitive_name(str(item.get("name", ""))):
+                    if isinstance(item, dict) and is_sensitive_name(
+                        str(item.get("name", ""))
+                    ):
                         item["value"] = "<redacted>"
             post_data = request.get("postData")
             if isinstance(post_data, dict):
@@ -105,17 +119,25 @@ def sanitize_har(har: Mapping[str, Any]) -> Dict[str, Any]:
                 params = post_data.get("params")
                 if isinstance(params, list):
                     for item in params:
-                        if isinstance(item, dict) and is_sensitive_name(str(item.get("name", ""))):
+                        if isinstance(item, dict) and is_sensitive_name(
+                            str(item.get("name", ""))
+                        ):
                             item["value"] = "<redacted>"
         response = entry.get("response")
         if isinstance(response, dict):
             response["headers"] = list(_header_items(response.get("headers", [])))
-            for cookie in response.get("cookies", []) if isinstance(response.get("cookies"), list) else []:
+            for cookie in (
+                response.get("cookies", [])
+                if isinstance(response.get("cookies"), list)
+                else []
+            ):
                 if isinstance(cookie, dict) and "value" in cookie:
                     cookie["value"] = "<redacted>"
             content = response.get("content")
             if isinstance(content, dict) and "text" in content:
-                content["text"] = _redact_body(content.get("text"), str(content.get("mimeType", "")))
+                content["text"] = _redact_body(
+                    content.get("text"), str(content.get("mimeType", ""))
+                )
     return clean
 
 
@@ -142,14 +164,18 @@ def run_actions(page: Any, actions: Sequence[Mapping[str, Any]]) -> None:
         elif kind == "sleep":
             time.sleep(float(action.get("seconds", 1)))
         elif kind == "wait_for_selector":
-            page.wait_for_selector(str(action["selector"]), timeout=int(action.get("timeout_ms", 15000)))
+            page.wait_for_selector(
+                str(action["selector"]), timeout=int(action.get("timeout_ms", 15000))
+            )
         else:
             raise ValueError(f"unsupported action type: {kind!r}")
 
 
 def write_sanitized_har(har: Mapping[str, Any], destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(sanitize_har(har), ensure_ascii=False), encoding="utf-8")
+    destination.write_text(
+        json.dumps(sanitize_har(har), ensure_ascii=False), encoding="utf-8"
+    )
     os.chmod(destination, 0o600)
 
 
@@ -179,33 +205,36 @@ def capture_local(args: argparse.Namespace) -> int:
     destination = Path(args.output).expanduser().resolve()
     actions = load_actions(args.actions)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    fd, raw_name = tempfile.mkstemp(prefix=".website-to-api-raw-", suffix=".har", dir=destination.parent)
-    os.close(fd)
-    raw_path = Path(raw_name)
-    raw_path.unlink(missing_ok=True)
-    try:
+    with tempfile.TemporaryDirectory(
+        prefix=".website-to-api-raw-", dir=destination.parent
+    ) as raw_directory:
+        raw_path = Path(raw_directory) / "capture.har"
         with sync_playwright() as playwright:
             browser = launch_local_browser(playwright, args.headed, args.channel)
-            context_args: Dict[str, Any] = {
-                "record_har_path": str(raw_path),
-                "record_har_content": "embed",
-                "record_har_mode": "minimal",
-            }
-            if args.url_filter:
-                context_args["record_har_url_filter"] = args.url_filter
-            context = browser.new_context(**context_args)
-            page = context.new_page()
-            page.goto(args.url, wait_until="domcontentloaded")
-            run_actions(page, actions)
-            time.sleep(args.wait)
-            context.close()
-            browser.close()
+            try:
+                context_args: Dict[str, Any] = {
+                    "record_har_path": str(raw_path),
+                    "record_har_content": "embed",
+                    "record_har_mode": "minimal",
+                }
+                if args.url_filter:
+                    context_args["record_har_url_filter"] = args.url_filter
+                context = browser.new_context(**context_args)
+                try:
+                    page = context.new_page()
+                    page.goto(args.url, wait_until="domcontentloaded")
+                    run_actions(page, actions)
+                    time.sleep(args.wait)
+                finally:
+                    context.close()
+            finally:
+                browser.close()
         with raw_path.open(encoding="utf-8") as handle:
             write_sanitized_har(json.load(handle), destination)
-    finally:
-        raw_path.unlink(missing_ok=True)
     print(f"Wrote sanitized HAR: {destination}")
-    print("The HAR may still contain personal response data; keep it private and delete it when done.")
+    print(
+        "The HAR may still contain personal response data; keep it private and delete it when done."
+    )
     return 0
 
 
@@ -274,7 +303,10 @@ def capture_cdp(args: argparse.Namespace) -> int:
             if identity in attached_pages:
                 return
             attached_pages.add(identity)
-            page.on("response", lambda response: entries.append(_cdp_entry(response.request, response)))
+            page.on(
+                "response",
+                lambda response: entries.append(_cdp_entry(response.request, response)),
+            )
 
         for current_page in context.pages:
             attach(current_page)
@@ -296,29 +328,43 @@ def capture_cdp(args: argparse.Namespace) -> int:
     }
     write_sanitized_har(har, destination)
     print(f"Wrote sanitized HAR: {destination} ({len(entries)} entries)")
-    print("The HAR may still contain personal response data; keep it private and delete it when done.")
+    print(
+        "The HAR may still contain personal response data; keep it private and delete it when done."
+    )
     return 0
 
 
 def common_capture_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("output", help="Destination HAR path")
-    parser.add_argument("--actions", help="JSON file containing an ordered array of browser actions")
-    parser.add_argument("--wait", type=float, default=3.0, help="Seconds to wait for late responses")
+    parser.add_argument(
+        "--actions", help="JSON file containing an ordered array of browser actions"
+    )
+    parser.add_argument(
+        "--wait", type=float, default=3.0, help="Seconds to wait for late responses"
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Capture a sanitized HAR for website API discovery.")
+    parser = argparse.ArgumentParser(
+        description="Capture a sanitized HAR for website API discovery."
+    )
     subparsers = parser.add_subparsers(dest="mode", required=True)
 
-    local = subparsers.add_parser("local", help="Launch an isolated local Chromium browser")
+    local = subparsers.add_parser(
+        "local", help="Launch an isolated local Chromium browser"
+    )
     local.add_argument("url")
     common_capture_arguments(local)
     local.add_argument("--headed", action="store_true")
-    local.add_argument("--channel", help="Installed Playwright channel, such as chrome or msedge")
+    local.add_argument(
+        "--channel", help="Installed Playwright channel, such as chrome or msedge"
+    )
     local.add_argument("--url-filter", help="Playwright HAR URL filter pattern")
     local.set_defaults(handler=capture_local)
 
-    cdp = subparsers.add_parser("cdp", help="Attach to an explicitly authorized CDP browser")
+    cdp = subparsers.add_parser(
+        "cdp", help="Attach to an explicitly authorized CDP browser"
+    )
     cdp.add_argument("cdp_url")
     common_capture_arguments(cdp)
     cdp.add_argument("--goto", help="Navigate after attaching")

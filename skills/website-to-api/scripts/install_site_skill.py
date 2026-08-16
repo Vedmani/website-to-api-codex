@@ -63,8 +63,11 @@ SENSITIVE_NAME_PARTS = (
 )
 PLACEHOLDER_PATTERNS = (
     re.compile(r"\bSITE_[A-Z0-9_]+\b"),
-    re.compile(r"\b(?:YES_OR_NO|GET_OR_POST|COOKIE_OR_HEADER_NAMES)\b"),
+    re.compile(
+        r"\b(?:YES_OR_NO|GET_OR_POST|COOKIE_OR_HEADER_NAMES|COOKIE_NAME_OR_EMPTY)\b"
+    ),
     re.compile(r"\bYYYY-MM-DD\b"),
+    re.compile(r"\b(?:TODO|FIXME)(?::|\b)"),
 )
 
 
@@ -129,6 +132,14 @@ def find_sensitive_artifacts(skill_dir: Path) -> List[Path]:
     return found
 
 
+def find_symlinks(skill_dir: Path) -> List[Path]:
+    return [
+        path.relative_to(skill_dir)
+        for path in skill_dir.rglob("*")
+        if path.is_symlink()
+    ]
+
+
 def should_skip(path_name: str, is_dir: bool) -> bool:
     lower = path_name.lower()
     if is_dir and lower in SKIP_DIRS:
@@ -159,7 +170,14 @@ def find_placeholders(skill_dir: Path) -> List[str]:
 
 def quick_validate_path() -> Path:
     codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
-    return codex_home / "skills" / ".system" / "skill-creator" / "scripts" / "quick_validate.py"
+    return (
+        codex_home
+        / "skills"
+        / ".system"
+        / "skill-creator"
+        / "scripts"
+        / "quick_validate.py"
+    )
 
 
 def run_validation(skill_dir: Path, validator: Path) -> None:
@@ -174,7 +192,9 @@ def preflight(skill_dir: Path, validator: Path, skip_validate: bool) -> None:
     if not (skill_dir / "SKILL.md").is_file():
         raise FileNotFoundError(f"source is missing SKILL.md: {skill_dir}")
     if not (skill_dir / "agents" / "openai.yaml").is_file():
-        raise FileNotFoundError("source is missing agents/openai.yaml; use $skill-creator first")
+        raise FileNotFoundError(
+            "source is missing agents/openai.yaml; use $skill-creator first"
+        )
 
     disallowed = find_disallowed_docs(skill_dir)
     if disallowed:
@@ -188,37 +208,60 @@ def preflight(skill_dir: Path, validator: Path, skip_validate: bool) -> None:
             "generated skill contains secret-like artifacts: "
             + ", ".join(str(path) for path in sensitive)
         )
+    symlinks = find_symlinks(skill_dir)
+    if symlinks:
+        raise ValueError(
+            "generated skills must not contain symbolic links: "
+            + ", ".join(str(path) for path in symlinks)
+        )
     placeholders = find_placeholders(skill_dir)
     if placeholders:
-        raise ValueError("generated skill contains unresolved placeholders: " + ", ".join(placeholders))
+        raise ValueError(
+            "generated skill contains unresolved placeholders: "
+            + ", ".join(placeholders)
+        )
     if not skip_validate:
         run_validation(skill_dir, validator)
 
 
-def atomic_install(source: Path, destination: Path, validator: Path, skip_validate: bool, force: bool) -> None:
+def atomic_install(
+    source: Path, destination: Path, validator: Path, skip_validate: bool, force: bool
+) -> None:
     destination_root = destination.parent
     destination_root.mkdir(parents=True, exist_ok=True)
-    stage_root = Path(tempfile.mkdtemp(prefix=f".{destination.name}-stage-", dir=destination_root))
+    stage_root = Path(
+        tempfile.mkdtemp(prefix=f".{destination.name}-stage-", dir=destination_root)
+    )
     staged = stage_root / destination.name
     backup = stage_root / f"{destination.name}.previous"
     replaced = False
+    cleanup_stage = True
     try:
         shutil.copytree(source, staged, ignore=ignore_names)
         if not skip_validate:
             run_validation(staged, validator)
         if destination.exists():
             if not force:
-                raise FileExistsError(f"destination already exists; use --force to replace: {destination}")
+                raise FileExistsError(
+                    f"destination already exists; use --force to replace: {destination}"
+                )
             os.replace(destination, backup)
             replaced = True
-        try:
-            os.replace(staged, destination)
-        except Exception:
-            if replaced and backup.exists() and not destination.exists():
+        os.replace(staged, destination)
+    except Exception:
+        if replaced and backup.exists() and not destination.exists():
+            try:
                 os.replace(backup, destination)
-            raise
+            except Exception as restore_error:
+                cleanup_stage = False
+                raise RuntimeError(
+                    "installation and automatic restore both failed; "
+                    f"the previous skill is preserved at {backup}"
+                ) from restore_error
+        raise
     finally:
-        shutil.rmtree(stage_root, ignore_errors=True)
+        if cleanup_stage:
+            shutil.rmtree(stage_root, ignore_errors=True)
 
 
 def install_skill(args: argparse.Namespace) -> int:
@@ -234,11 +277,15 @@ def install_skill(args: argparse.Namespace) -> int:
     if args.dry_run:
         print(f"[dry-run] Validated source: {source}")
         print(f"[dry-run] Would atomically install to: {destination}")
-        print("[dry-run] Secret-like artifacts, HARs, environment files, caches, and logs are rejected")
+        print(
+            "[dry-run] Secret-like artifacts, HARs, environment files, caches, and logs are rejected"
+        )
         return 0
 
     if not args.approved_by_user:
-        raise PermissionError("installation requires explicit user approval; rerun with --approved-by-user")
+        raise PermissionError(
+            "installation requires explicit user approval; rerun with --approved-by-user"
+        )
 
     atomic_install(source, destination, validator, args.skip_validate, args.force)
     print(f"Installed {skill_name} to {destination}")
@@ -262,9 +309,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=str(quick_validate_path()),
         help="Path to skill-creator quick_validate.py",
     )
-    parser.add_argument("--force", action="store_true", help="Replace an existing installed skill")
-    parser.add_argument("--dry-run", action="store_true", help="Validate and show the installation target")
-    parser.add_argument("--skip-validate", action="store_true", help="Skip quick_validate.py")
+    parser.add_argument(
+        "--force", action="store_true", help="Replace an existing installed skill"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate and show the installation target",
+    )
+    parser.add_argument(
+        "--skip-validate", action="store_true", help="Skip quick_validate.py"
+    )
     parser.add_argument(
         "--approved-by-user",
         action="store_true",

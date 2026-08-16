@@ -37,8 +37,8 @@ Generated website-to-api skills must set `policy.allow_implicit_invocation: fals
 ## Python
 
 - Use `uv run` for generated site client scripts.
-- Use Codex's bundled Python for local validation/helper scripts when available:
-  `/Users/vedmani/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3`
+- Use Codex's bundled Python for local validation/helper scripts when available; otherwise use
+  `uv run` with the dependencies shown in this repository's testing commands.
 
 ## Browser Automation
 

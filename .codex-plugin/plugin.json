@@ -1,17 +1,19 @@
 {
   "name": "website-to-api",
-  "version": "0.2.0+codex.20260816055604",
+  "version": "0.2.0+codex.20260816061010",
   "description": "Discover and verify website internal APIs with browser inspection, sanitized HAR analysis, and reusable clients.",
   "author": {
-    "name": "Hamel Husain",
-    "email": "hamel.husain@gmail.com"
+    "name": "Vedmani",
+    "url": "https://github.com/Vedmani"
   },
+  "homepage": "https://github.com/Vedmani/website-to-api-codex",
+  "repository": "https://github.com/Vedmani/website-to-api-codex",
   "skills": "./skills/",
   "interface": {
     "displayName": "Website to API",
     "shortDescription": "Discover and verify internal website APIs",
     "longDescription": "Inspect authorized browser workflows, analyze sanitized network traffic, minimize authentication requirements, and generate tested reusable API clients and site skills.",
-    "developerName": "Hamel Husain",
+    "developerName": "Vedmani",
     "category": "Developer Tools",
     "capabilities": [
       "Interactive",
