@@ -1,0 +1,7 @@
+interface:
+  display_name: "Website to API"
+  short_description: "Discover, verify, and wrap internal website APIs"
+  default_prompt: "Use $website-to-api to inspect an authorized browser workflow, verify its internal API, and build a reusable client."
+
+policy:
+  allow_implicit_invocation: false
