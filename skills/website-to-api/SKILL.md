@@ -19,11 +19,8 @@ Turn an authorized browser workflow into a tested HTTP client and an optional si
 
 Stop when the client works. Do not exhaustively map an API unless the user asks.
 
-## Safety Boundary
+## Sensitive Data Handling
 
-- Work only with sites, accounts, and data the user is authorized to access.
-- Do not bypass authentication, paywalls, CAPTCHAs, bot controls, or authorization checks.
-- Default to read-only endpoints. Obtain explicit approval before replaying writes, purchases, messages, uploads, deletes, or other consequential actions.
 - Treat HARs, browser profiles, cookies, storage state, request bodies, and response bodies as sensitive.
 - Never print or store credential values in reports, generated skills, source control, or shell history.
 

@@ -29,6 +29,16 @@ def test_core_skill_uses_progressive_disclosure():
         assert (SKILL / "references" / reference).is_file()
 
 
+def test_core_skill_keeps_data_handling_without_capability_restrictions():
+    text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    assert "## Sensitive Data Handling" in text
+    assert "Treat HARs, browser profiles" in text
+    assert "Never print or store credential values" in text
+    assert "Work only with sites, accounts" not in text
+    assert "Do not bypass authentication" not in text
+    assert "Default to read-only endpoints" not in text
+
+
 def test_client_template_avoids_secret_cli_flags_and_hardcoded_ua():
     text = (CANONICAL_TEMPLATE / "scripts" / "client.py.template").read_text(
         encoding="utf-8"

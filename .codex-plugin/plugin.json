@@ -1,6 +1,6 @@
 {
   "name": "website-to-api",
-  "version": "0.2.0+codex.20260816061010",
+  "version": "0.2.0+codex.20260816093334",
   "description": "Discover and verify website internal APIs with browser inspection, sanitized HAR analysis, and reusable clients.",
   "author": {
     "name": "Vedmani",
